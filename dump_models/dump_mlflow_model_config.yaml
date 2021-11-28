@@ -1,0 +1,10 @@
+
+
+
+
+local_path: "//home/heiko/Repos/dashapp_withmlflow/dashapp/models"
+
+model_list: 
+  - "dashapp_model"
+  - "dashapp_model2"
+
