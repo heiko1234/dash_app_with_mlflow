@@ -10,7 +10,12 @@ from dash import Input, Output, State, callback_context
 from dash import html
 import dash_daq as daq
 from dash import dcc
+
+
 from dash import dash_table
+from dash.dash_table.Format import Group
+from dash.dash_table.Format import Format, Scheme
+
 
 from pathlib import Path
 
@@ -406,6 +411,7 @@ def render_main_content(page):
                     html.Div(children=[
                         html.Div(detail_card(content = dcc.Loading(id="suggestion_id"), id="Card_id6", height="90%", width="90%")),
                         html.Div(detail_card(content = dcc.Loading(id="suggestion_id2"), id="Card_id7", height="90%", width="90%")),
+                        html.Div(detail_card(id = "warning_card", title = "Warning Card", content = html.Div(id="warning_content_sp", style={"overflow": "auto", "height": "90px"}), height="250px", width="1000px")),
                         ],
                         style={"display": "block", "marginLeft": "50px", "marginRight": "50px", "marginTop": "50px", "marginBottom": "50px"} 
                     )
@@ -535,7 +541,7 @@ def render_side_content(page):
                         html.H3(""),
                         dcc.RangeSlider(
                             id="SA_range", 
-                            value = [50,70],
+                            value = [52,70],
                             min = 40,
                             max = 90,
                             step = 0.1,
@@ -754,7 +760,7 @@ def SP_prediction(SP_MFI, M_per_range, Xf_range, SA_range, n_clicks):
                         html.H3(f"Selected Model: MFI: {pred_MFI}"),
                         dash_table.DataTable(
                             id="table", 
-                            columns = [{"name": i, "id": i} for i in dff.columns],
+                            columns = [{"name": i, "id": i, "type": "numeric", "format": Format(precision=2, scheme=Scheme.fixed)} for i in dff.columns],
                             data= dff.to_dict(orient="records")
                         )
                     ]
@@ -819,11 +825,46 @@ def SP_prediction(SP_CI, M_per_range, Xf_range, SA_range, n_clicks):
                         html.H3(f"Selected Model: CI: {pred_CI}"),
                         dash_table.DataTable(
                             id="table", 
-                            columns = [{"name": i, "id": i} for i in dff.columns],
+                            columns = [{"name": i, "id": i, "type": "numeric", "format": Format(precision=2, scheme=Scheme.fixed)} for i in dff.columns],
+                            style_cell={'minWidth': '180px', 'width': '180px', 'maxWidth': '180px',},
                             data= dff.to_dict(orient="records")
                         )
                     ]
                 )
+
+
+
+@app.callback(
+    Output("warning_content_sp", "children"),
+    [
+        Input("M_per_range", "value"),
+        Input("Xf_range", "value"),
+        Input("SA_range", "value"),
+    ]
+)
+def warnings_MFI(M, Xf, SA):
+
+    nested_dict = {}
+    nested_dict["MFI_polymer"] = MFI_limits_dict
+    nested_dict["CI_polymer"] = CI_limits_dict
+
+    feature_limits= flatten_consolidate_dict(nested_dict = nested_dict, take_lower_min=True, take_higher_max=True)
+
+    return html.Div(
+                children=[
+                    create_warning(TAG_limit_dict=feature_limits, key = "M%", value=M[0]),
+                    create_warning(TAG_limit_dict=feature_limits, key = "M%", value=M[1]),
+                    create_warning(TAG_limit_dict=feature_limits, key = "Xf", value=Xf[0]),
+                    create_warning(TAG_limit_dict=feature_limits, key = "Xf", value=Xf[1]), 
+                    create_warning(TAG_limit_dict=feature_limits, key = "SA", value=SA[0]),
+                    create_warning(TAG_limit_dict=feature_limits, key = "SA", value=SA[1])
+                ]
+            )
+
+
+
+
+
 
 
 
