@@ -307,12 +307,6 @@ page_controls = html.Div(
                         value="suggestion_inputs",
                         className="custom-tab",
                     ),
-                    dcc.Tab(
-                        id="evaluation-tab",
-                        label="Evaluation",
-                        value="evaluation_inputs",
-                        className="custom-tab",
-                    ),
                 ],
         ),
         html.Div(id="rendered_sidebar")
@@ -411,7 +405,7 @@ def render_main_content(page):
                     html.Div(children=[
                         html.Div(detail_card(content = dcc.Loading(id="suggestion_id"), id="Card_id6", height="90%", width="90%")),
                         html.Div(detail_card(content = dcc.Loading(id="suggestion_id2"), id="Card_id7", height="90%", width="90%")),
-                        html.Div(detail_card(id = "warning_card", title = "Warning Card", content = html.Div(id="warning_content_sp", style={"overflow": "auto", "height": "90px"}), height="250px", width="1000px")),
+                        html.Div(detail_card(id = "warning_card", title = "Warning Card", content = html.Div(id="warning_content_sp", style={"overflow": "auto", "height": "90px"}), height="130px", width="1000px")),
                         ],
                         style={"display": "block", "marginLeft": "50px", "marginRight": "50px", "marginTop": "50px", "marginBottom": "50px"} 
                     )
@@ -573,7 +567,8 @@ def userguide(n_clicks, n_clicks_close):
             style={"padding": "5px",
                 "width": "300px",
                 "height": "500px",
-                "overflow": "auto"})
+                "overflow": "auto",
+                "display": "none"})
 
     elif 'userguide_id' in changed_id:
 
@@ -588,9 +583,9 @@ def userguide(n_clicks, n_clicks_close):
                 style={"padding": "5px",
                 "width": "300px",
                 "height": "500px",
-                "overflow": "auto"})
+                "overflow": "auto",
+                "display": "block"})
         
-        # return {"display": "none"}
 
 
 @app.callback(
