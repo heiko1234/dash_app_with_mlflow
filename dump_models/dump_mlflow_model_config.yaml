@@ -2,9 +2,9 @@
 
 
 
-local_path: "//home/heiko/Repos/dashapp_withmlflow/dashapp/models"
+local_path: "/home/heiko/Repos/dash_app_with_mlflow/dashapp/models"
 
 model_list: 
-  - "dashapp_model"
-  - "dashapp_model2"
+  - "MFI_polymer"
+  - "CI_polymer"
 

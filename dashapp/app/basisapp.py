@@ -2,10 +2,7 @@
 
 import os
 import dash
-import json
-import mlflow
-import pickle
-import copy
+
 
 import pandas as pd
 
@@ -13,15 +10,17 @@ from dash import Input, Output, State, callback_context
 from dash import html
 import dash_daq as daq
 from dash import dcc
+from dash import dash_table
 
+from pathlib import Path
 
-from pathlib import Path, PurePosixPath
-# from azure.storage.blob import BlobServiceClient
+# utility functions 
+from app.app_utility import get_mlflow_model, get_model_json_artifact
+from app.app_utility import decode_df_mlflow_dtype, create_warning
+from app.app_utility import flatten_consolidate_dict, flatten_dict
+from app.app_utility import create_polymer_data
 
-
-# import mlflow.sklearn
-import mlflow
-
+from app.app_utility import lossfunction, genetic_algorithm
 
 
 from dotenv import load_dotenv
@@ -37,9 +36,51 @@ print(f"Local run: {local_run}")
 
 # Azure Strings and infos
 connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-container_name = os.getenv("LOCAL_BLOB_MODEL_CONTAINER_NAME", "model-container")
+container_name = os.getenv("CONTAINER_NAME", "model-container")
 container_name
 connection_string
+
+
+
+MFI_model= get_mlflow_model(azure=True, model_name="MFI_polymer")
+CI_model= get_mlflow_model(azure=True, model_name="CI_polymer")
+
+CI_dtype_dict=get_model_json_artifact(model_name= "CI_polymer", features="feature_dtypes.json", azure=True)
+MFI_dtype_dict=get_model_json_artifact(model_name= "MFI_polymer", features="feature_dtypes.json", azure=True)
+
+CI_limits_dict=get_model_json_artifact(model_name= "CI_polymer", features="feature_limits.json", azure=True)
+MFI_limits_dict=get_model_json_artifact(model_name= "MFI_polymer", features="feature_limits.json", azure=True)
+
+
+
+# custom funcitons
+def generate_modal(markdown_text):
+    return html.Div(
+        id="markdown",
+        className="modal",
+        children=(
+            html.Div(
+                id="markdown-container",
+                className="markdown-container",
+                children=[
+                    #html.Div(
+                    #    className="close-container",
+                    #    children=html.Button(
+                    #        "Close",
+                    #        id="markdown_close",
+                    #        n_clicks=0,
+                    #        className="closeButton",
+                    #    ),
+                    #),
+                    html.Div(
+                        className="markdown-text",
+                        children=dcc.Markdown(markdown_text)
+                        ),
+                ],
+            )
+        ),
+    )
+
 
 
 
@@ -47,16 +88,6 @@ connection_string
 # Initalise the app
 app = dash.Dash(__name__, suppress_callback_exceptions = True)
 
-
-# mlflow dtypes
-mlflow_dtypes = {
-    "float": "float32",
-    "integer": "int32",
-    "boolean": "bool",
-    "double": "double",
-    "string": "object",
-    "binary": "binary",
-}
 
 
 
@@ -99,137 +130,6 @@ model_dropdown_options = [{"label": "linear", "value": "linear"},
                             {"label": "adaboost", "value": "adaboost"}]
 
 
-
-
-def get_mlflow_model(model_name, azure=True, model_dir = "/model/"):
-
-    if azure:
-        model_dir = os.getenv("MLFLOW_MODEL_DIRECTORY", "models:/")
-        model_stage = os.getenv("MLFLOW_MODEL_STAGE", "Staging")
-        artifact_path = PurePosixPath(model_dir).joinpath(model_name, model_stage)
-        artifact_path
-
-        model = mlflow.pyfunc.load_model(str(artifact_path))
-        print(f"Model {model_name} loaden from Azure: {artifact_path}")
-
-    if not azure:
-        model = pickle.load(open(f"{model_dir}/{model_name}/model.pkl", 'rb'))
-        print(f"Model {model_name} loaded from local pickle file")
-
-    return model
-
-
-def get_model_json_artifact(
-    local=True,
-    path=None,
-    model_path="models",
-    model_name=None,
-    features="feature_dtypes.json",
-):
-    """This function loads json file form a dumped mlflow model
-    Args:
-        local (bool, optional): [description]. Defaults to True.
-        path ([type], optional): in docker: "/model/", else folder where models are saved.
-        model_path (str, optional): [description]. Defaults to "models".
-        model_name ([type], optional): [sklearn model name]. Defaults to None.
-        features (str, optional): feature_dtypes.json/ feature_limits.json
-    Returns:
-        [type]: [json file]
-    """
-
-    if local:
-        if path is None:
-            path = Path(__file___).parent
-            # print(f"Parentspath: {path}")
-    if not local:
-        # Access the artifacts to "/model/model_name/file" for the docker.
-        path = "/model/"
-        model_path = ""
-
-    path_load = os.path.join(path, model_path, model_name, features)
-
-    return json.loads(open(path_load, "r").read())
-
-
-def create_all_model_json_dict(local=True,
-    path=None,
-    model_path="models",
-    features="feature_dtypes.json"):
-    output = {}
-    folderpath = os.path.join(path, model_path)
-    for folder in os.listdir(folderpath):
-        if os.path.isdir(os.path.join(folderpath, folder)):
-            output[folder] = get_model_json_artifact(
-                            local=local,
-                            path=path,
-                            model_path=model_path,
-                            model_name=folder,
-                            features=features,
-                        )
-    return output
-
-
-def flatten_dict(nested_dict):
-    output={}
-    for key in nested_dict.keys():
-        for second_key in nested_dict[key].keys():
-            if second_key not in output:
-                output[second_key] = nested_dict[key][second_key]
-    return output
-
-
-def flatten_consolidate_dict(nested_dict, take_lower_min=True, take_higher_max=True):
-    output={}
-    for key in nested_dict.keys():
-        for second_key in nested_dict[key].keys():
-            if second_key not in output:
-                output[second_key] = copy.deepcopy(nested_dict[key][second_key])
-            if second_key in output:
-                if take_lower_min:
-                    if output[second_key]["min"] > nested_dict[key][second_key]["min"]:
-                        output[second_key]["min"] = copy.deepcopy(nested_dict[key][second_key]["min"])
-                else:
-                    if output[second_key]["min"] < nested_dict[key][second_key]["min"]:
-                        output[second_key]["min"] = copy.deepcopy(nested_dict[key][second_key]["min"])
-                if take_higher_max:
-                    if output[second_key]["max"] < nested_dict[key][second_key]["max"]:
-                        output[second_key]["max"] = copy.deepcopy(nested_dict[key][second_key]["max"])
-                else:
-                    if output[second_key]["max"] > nested_dict[key][second_key]["max"]:
-                        output[second_key]["max"] = copy.deepcopy(nested_dict[key][second_key]["max"])
-    return output
-
-
-def create_warning(TAG_limit_dict, key, value, digits=2):
-    if key in TAG_limit_dict.keys():
-        if value < TAG_limit_dict[key]["min"]:
-            return dcc.Markdown(
-                f"""{key} is below min value of model:
-                        {round(TAG_limit_dict[key]["min"], digits)} """
-            )
-
-        elif value > TAG_limit_dict[key]["max"]:
-            return dcc.Markdown(
-                f"""{key} is above max value of model:
-                        {round(TAG_limit_dict[key]["max"], digits)} """
-            )
-
-        else:
-            return None
-
-    else:
-        return None
-
-
-def transform_df_to_mlflow_df(data, dtype_dict, mlflow_dtypes):
-    for element in list(dtype_dict.keys()):
-        try:
-            data[element] = data[element].astype(
-                mlflow_dtypes[dtype_dict[element]]
-            )
-        except BaseException:
-            continue
-    return data
 
 
 
@@ -325,33 +225,35 @@ def content_card(
     return card
 
 
-def gauge_color(value, min = 20, max= 60, ranges=[0,30,40,50,60]):
+def gauge_color(value, min = 20, max= 60, ranges=[0,30,40,50,60], color=None, label = "Parameter"):
+    
+    if not color:
+        color ={
+            "gradient": True,
+            "ranges": {
+                "green": [ranges[0], ranges[1]],
+                "yellow": [ranges[1], ranges[2]],
+                "red": [ranges[2], ranges[3]],
+                "purple": [ranges[3],ranges[4]],
+            },
+        }
     return html.Div(
         daq.Gauge(
             id="gauge_id",
-            color={
-                "gradient": True,
-                "ranges": {
-                    "green": [ranges[0], ranges[1]],
-                    "yellow": [ranges[1], ranges[2]],
-                    "red": [ranges[2], ranges[3]],
-                    "purple": [ranges[3],ranges[4]],
-                },
-            },
+            color=color,
             showCurrentValue=True,
-            scale={"start": 0, "interval": 1, "labelInterval": 10},
             units="Unit",
             value=value,
-            label="Parameter",
+            label=label,
             max=max,
             min=min,
-            size=500,
+            size=350,
         )
     )
 
 
 
-
+# page controls
 page_controls = html.Div(
     id="pagecontrol",   
     children=[
@@ -368,66 +270,47 @@ page_controls = html.Div(
         ], style={"display": "flex"},
         ),
         html.H3(""),
-        html.H3("Load Content?"),
-        html.Button(
-            "Yes/No",
-            id = "button_id",
-            n_clicks=0),
+        #html.H3("select a model"),
+        #html.H3(""),
+        #dcc.Dropdown(
+        #    id = "model_dropdown", 
+        #    options=model_dropdown_options,
+        #    value=model_dropdown_options[0]["value"],
+        #    style={"width": "100px"}
+        #),
         html.H3(""),
-        dcc.Dropdown(
-            id = "model_dropdown", 
-            options=model_dropdown_options,
-            value=model_dropdown_options[0]["value"],
-            style={"width": "100px"}
+        dcc.Tabs(
+                id="app-tabs",
+                value="manual_inputs",
+                className="custom-tabs",
+                children=[
+                    dcc.Tab(
+                        id="manual-tab",
+                        label="Inputs",
+                        value="manual_inputs",
+                        className="custom-tab",
+                    ),
+                    dcc.Tab(
+                        id="model-tab",
+                        label="Model",
+                        value="model_inputs",
+                        className="custom-tab",
+                    ),
+                    dcc.Tab(
+                        id="suggestion-tab",
+                        label="Suggestion",
+                        value="suggestion_inputs",
+                        className="custom-tab",
+                    ),
+                    dcc.Tab(
+                        id="evaluation-tab",
+                        label="Evaluation",
+                        value="evaluation_inputs",
+                        className="custom-tab",
+                    ),
+                ],
         ),
-        html.H3(""),
-        daq.NumericInput(
-            id="MP09", 
-            label="ManufacturingProcess09",
-            value = 40,
-            min = 0,
-            max = 100,
-            size = "150px"),
-        html.H3(""),
-        daq.NumericInput(
-            id="MP13", 
-            label="ManufacturingProcess13",
-            value = 35,
-            min = 0,
-            max = 100,
-            size = "150px"),
-        html.H3(""),
-        daq.NumericInput(
-            id="MP20", 
-            label="ManufacturingProcess20",
-            value = 4400,
-            min = 4000,
-            max = 5000,
-            size = "150px"),
-        html.H3(""),
-        daq.NumericInput(
-            id="MP22", 
-            label="ManufacturingProcess22",
-            value = 10,
-            min = 10,
-            max = 20,
-            size = "150px"),
-        daq.NumericInput(
-            id="MP32", 
-            label="ManufacturingProcess32",
-            value = 150,
-            min= 100,
-            max = 300,
-            size = "150px"),
-        html.H3(""),
-        daq.NumericInput(
-            id="BM02", 
-            label="BiologicalMaterial02",
-            value = 55,
-            min = 0,
-            max = 100,
-            size = "150px"),
-        html.H3(""),
+        html.Div(id="rendered_sidebar")
     ]
 )
 
@@ -462,22 +345,22 @@ sidebar_layout = html.Div(
 @app.callback(
     Output("main_page", "children"),
     [
-        Input("button_id", "n_clicks"),
+        Input("app-tabs", "value")
     ],
 )
-def render_main_content(n_clicks):
-    changed_id = [p['prop_id'] for p in callback_context.triggered][0]
+def render_main_content(page):
     #
-    if 'button_id' in changed_id:
-        return([
-            html.H2("Page 1"),
+    if page == "manual_inputs":
+        return(html.Div(
+            children=[
+            html.H3("Checking User Inputs"),
             html.Div(
                 children=[
-                    html.H3("Any Main Content"),
+                    html.H3("User Inputs"),
                     html.Div(children=[
                         html.Div(detail_card(content = dcc.Loading(id="outgauge"), id="Card_id2", height="90%", width="90%")),
                         html.Div(detail_card(content = dcc.Loading(id="outgauge2"), id="Card_id3", height="90%", width="90%")),
-                        html.Div(detail_card(content= html.Div(id="userguide_content_output"), id="Card_userguide", height="90%", width="300px")),
+                        html.Div(detail_card(content = dcc.Loading(id="outgauge3"), id="Card_id3", height="90%", width="90%")),
                     ], 
                     style={"display": "flex", "height": "50%", "width": "90%", "marginLeft": "50px", "marginRight": "50px", "marginTop": "50px", "marginBottom": "50px"}
                     ),
@@ -489,7 +372,48 @@ def render_main_content(n_clicks):
                 ],
                 style={"display": "block", "marginLeft": "50px", "marginRight": "50px", "marginTop": "50px", "marginBottom": "50px"}
             ),
-    ])
+        ])),
+    if page == "model_inputs":
+       return(html.Div(
+            children=[
+            html.H3("Modelling"),
+            html.Div(
+                children=[
+                   html.H3("User Inputs"),
+                    html.Div(children=[
+                        html.Div(detail_card(content = dcc.Loading(id="gaugemodelling"), id="Card_id4", height="90%", width="90%")),
+                        html.Div(detail_card(content = dcc.Loading(id="gaugemodelling2"), id="Card_id5", height="90%", width="90%")),
+                    ], 
+                    style={"display": "flex", "height": "50%", "width": "90%", "marginLeft": "50px", "marginRight": "50px", "marginTop": "50px", "marginBottom": "50px"}
+                    ),
+                    html.Div(children=[
+                        html.Div(detail_card(id = "warning_card", title = "Warning Card", content = html.Div(id="warning_content", style={"overflow": "auto", "height": "90px"}), height="120px", width="1500px")),
+                        html.H3(""),
+                    ],
+                    style = {"display": "flex", "marginLeft": "50px", "marginRight": "50px", "marginTop": "50px", "marginBottom": "50px"})
+                ],
+                style={"display": "block", "marginLeft": "50px", "marginRight": "50px", "marginTop": "50px", "marginBottom": "50px"}
+            ),
+        ])
+    ),
+    if page == "suggestion_inputs":
+       return(html.Div(
+            children=[
+            html.H3("Set Point Suggestions"),
+            html.Div(
+                children=[
+                   html.H3("Suggestions"),
+                    html.Div(children=[
+                        html.Div(detail_card(content = dcc.Loading(id="suggestion_id"), id="Card_id6", height="90%", width="90%")),
+                        html.Div(detail_card(content = dcc.Loading(id="suggestion_id2"), id="Card_id7", height="90%", width="90%")),
+                        ],
+                        style={"display": "block", "marginLeft": "50px", "marginRight": "50px", "marginTop": "50px", "marginBottom": "50px"} 
+                    )
+                    ],
+                ),
+            ]
+            )
+       ),
 
     else:
         return ([
@@ -497,108 +421,133 @@ def render_main_content(n_clicks):
         ])
 
 
-
-
+# side content
 @app.callback(
-    Output("outgauge", "children"),
+    Output("rendered_sidebar", "children"),
     [
-        Input("MP09", "value"),
-        Input("MP13", "value"),
-        Input("MP20", "value"),
-        Input("MP22", "value"),
-        Input("MP32", "value"),
-        Input("BM02", "value"),
-        Input("model_dropdown", "value")
+        Input("app-tabs", "value")
     ]
 )
-# MP09, MP32, MP13, MP20, MP22, BM02
-def update_gauche_value2(MPO9, MP13, MP20, MP22, MP32, BM02, model_choise):
+def render_side_content(page):
+    if (page == "manual_inputs") or (page == "model_inputs"):
+        return  html.Div(
+                    children=[
+                        html.H3(""),
+                        html.H3("M%"),
+                        html.H3(""),
+                        daq.Slider(
+                            id="M_per", 
+                            #label="M%",
+                            value = 2,
+                            min = 0,
+                            max = 5,
+                            step = 0.1,
+                            color="blue",
+                            handleLabel={"showCurrentValue": True,"label": "VALUE"},
+                            #size = "150px"
+                            ),
+                        html.H3(""),
+                        html.H3("Xf"),
+                        html.H3(""),
+                        daq.Slider(
+                            id="Xf", 
+                            #label="Xf",
+                            value = 16,
+                            min = 7.5,
+                            max = 25,
+                            step = 0.1,
+                            handleLabel={"showCurrentValue": True,"label": "VALUE"},
+                            color="blue",
+                            #size = "150px"
+                            ),
+                        html.H3(""),
+                        html.H3("SA"),
+                        html.H3(""),
+                        daq.Slider(
+                            id="SA", 
+                            #label="SA",
+                            value = 60,
+                            min = 40,
+                            max = 90,
+                            step = 0.1,
+                            color="blue",
+                            handleLabel={"showCurrentValue": True,"label": "VALUE"},
+                            #size = "150px"
+                            ),
+                        html.H3(""),
+                    ],
+        )
+    if page == "suggestion_inputs":
+        return  html.Div(
+                    children=[
+                        html.H3(""),
+                        html.H3("CI"),
+                        html.H3(""),
+                        daq.Slider(
+                            id="CI_id", 
+                            value = 90,
+                            min = 0,
+                            max = 200,
+                            step = 1,
+                            color="blue",
+                            handleLabel={"showCurrentValue": True,"label": "VALUE"},
+                            ),
+                        html.H3(""),
+                        html.H3("MFI"),
+                        html.H3(""),
+                        daq.Slider(
+                            id="MFI_id", 
+                            value = 196,
+                            min = 190,
+                            max = 200,
+                            step = 0.1,
+                            handleLabel={"showCurrentValue": True,"label": "VALUE"},
+                            color="blue",
+                            ),
+                        html.H3(""),
+                        html.Button('Execute', id='execute-button', n_clicks=0),
+                        html.H3(""),
+                        html.H3("-----"),
+                        html.H3(""),
+                        html.H3("M%"),
+                        html.H3(""),
+                        dcc.RangeSlider(
+                            id="M_per_range", 
+                            value = [2,3],
+                            min = 0,
+                            max = 5,
+                            step = 0.1,
+                            tooltip={"placement": "bottom", "always_visible": True}
+                            ),
+                        html.H3(""),
+                        html.H3("Xf"),
+                        html.H3(""),
+                        dcc.RangeSlider(
+                            id="Xf_range", 
+                            value = [14,18],
+                            min = 7.5,
+                            max = 25,
+                            step = 0.1,
+                            tooltip={"placement": "bottom", "always_visible": True}
+                            ),
+                        html.H3(""),
+                        html.H3("SA"),
+                        html.H3(""),
+                        dcc.RangeSlider(
+                            id="SA_range", 
+                            value = [50,70],
+                            min = 40,
+                            max = 90,
+                            step = 0.1,
+                            tooltip={"placement": "bottom", "always_visible": True}
+                            ),
 
-    if model_choise == "linear":
-
-        model = get_mlflow_model(model_name="dashapp_model", azure=True, model_dir = "/model/")
+                    ]
+        )
 
     else:
+        return html.H3("to be created")
 
-        model = get_mlflow_model(model_name="dashapp_model2", azure=True, model_dir = "/model/")
-
-
-    # MPO9, MP13, MP20, MP22, MP32, BM02 = 40, 160, 36, 60, 10, 40
-
-    data = pd.DataFrame(data= [[MPO9, MP13, MP20, MP22, MP32, BM02]], 
-                    columns = ["ManufacturingProcess09",
-                            "ManufacturingProcess13",
-                            "ManufacturingProcess20",
-                            "ManufacturingProcess22",
-                            "ManufacturingProcess32",
-                            "BiologicalMaterial02"]
-                        )
-    
-    path_app = Path(__file__).parents[1]
-    feature_dtype_dict = create_all_model_json_dict(local=True,
-        path=path_app,
-        model_path="models",
-        features="feature_dtypes.json"
-        )
-    feature_dtype_dict = flatten_dict(nested_dict=feature_dtype_dict)
-
-
-    for element in list(feature_dtype_dict.keys()):
-        data[element] = data[element].astype(mlflow_dtypes[feature_dtype_dict[element]])
-
-
-    value = model.predict(data)[-1]
-
-    return gauge_color(value, min=20, max= 60, ranges=[20,30,40,50,60])
-
-
-
-@app.callback(
-    Output("outgauge2", "children"),
-    [
-        Input("MP09", "value"),
-        Input("MP13", "value"),
-        Input("MP20", "value"),
-        Input("MP22", "value"),
-        Input("MP32", "value"),
-        Input("BM02", "value"),
-    ]
-)
-# MP09, MP32, MP13, MP20, MP22, BM02
-def update_gauche_value2(MPO9, MP13, MP20, MP22, MP32, BM02):
-
-
-    model = get_mlflow_model(model_name="dashapp_model", azure=True, model_dir = "/model/")
-
-
-    # MPO9, MP13, MP20, MP22, MP32, BM02 = 40, 160, 36, 60, 10, 40
-
-    data = pd.DataFrame(data= [[MPO9, MP13, MP20, MP22, MP32, BM02]], 
-                    columns = ["ManufacturingProcess09",
-                            "ManufacturingProcess13",
-                            "ManufacturingProcess20",
-                            "ManufacturingProcess22",
-                            "ManufacturingProcess32",
-                            "BiologicalMaterial02"]
-                        )
-    
-    path_app = Path(__file__).parents[1]
-    feature_dtype_dict = create_all_model_json_dict(local=True,
-        path=path_app,
-        model_path="models",
-        features="feature_dtypes.json"
-        )
-    feature_dtype_dict = flatten_dict(nested_dict=feature_dtype_dict)
-
-
-    for element in list(feature_dtype_dict.keys()):
-        data[element] = data[element].astype(mlflow_dtypes[feature_dtype_dict[element]])
-
-
-
-    value = model.predict(data)[-1]
-
-    return gauge_color(value, min=20, max= 60, ranges=[20,30,40,50,60])
 
 
 @app.callback(
@@ -634,7 +583,81 @@ def userguide(n_clicks, n_clicks_close):
                 "width": "300px",
                 "height": "500px",
                 "overflow": "auto"})
+        
+        # return {"display": "none"}
 
+
+@app.callback(
+    Output("outgauge", "children"),
+    [
+        Input("M_per", "value")
+    ]
+)
+def create_gauge(M_per_value):
+    return gauge_color(value=M_per_value, min = 0, max= 5, ranges=[0,1,3,4,5], label="M%")
+
+
+
+
+@app.callback(
+    Output("outgauge2", "children"),
+    [
+        Input("Xf", "value")
+    ]
+)
+def create_gauge(Xf_value):
+    return gauge_color(value=Xf_value, min = 7.5, max= 25, ranges=[7.5,12,15,18,25], label="Xf")
+
+
+
+@app.callback(
+    Output("outgauge3", "children"),
+    [
+        Input("SA", "value")
+    ]
+)
+def create_gauge2(SA_value):
+    return gauge_color(value=SA_value, min = 40, max= 90, ranges=[40,50,65,80,90], label="SA")
+
+
+
+@app.callback(
+    Output("gaugemodelling", "children"),
+    [
+        Input("M_per", "value"),
+        Input("Xf", "value"),
+        Input("SA", "value"), 
+    ]
+)
+def create_gaugemodelling(M, Xf, SA):
+
+    data = create_polymer_data(M_per=M, Xf = Xf, SA=SA)
+
+    polymer_data_decoded = decode_df_mlflow_dtype(data = data, dtype_dict=MFI_dtype_dict)
+    
+    pvalue = round(MFI_model.predict(polymer_data_decoded)[0], 2)
+
+    return gauge_color(value=pvalue, min = 190, max= 200, ranges=[190, 192, 196, 198,200], label="MFI")
+
+
+
+@app.callback(
+    Output("gaugemodelling2", "children"),
+    [
+        Input("M_per", "value"),
+        Input("Xf", "value"),
+        Input("SA", "value"), 
+    ]
+)
+def create_gaugemodelling2(M, Xf, SA):
+
+    data = create_polymer_data(M_per=M, Xf = Xf, SA=SA)
+
+    polymer_data_decoded = decode_df_mlflow_dtype(data = data, dtype_dict=CI_dtype_dict)
+    
+    pvalue = round(CI_model.predict(polymer_data_decoded)[0], 2)
+
+    return gauge_color(value=pvalue, min = 0, max= 200, ranges=[0,50,100,150,200], label="CI")
 
 
 
@@ -643,40 +666,164 @@ def userguide(n_clicks, n_clicks_close):
 @app.callback(
     Output("warning_content", "children"),
     [
-        Input("MP09", "value"),
-        Input("MP13", "value"),
-        Input("MP20", "value"),
-        Input("MP22", "value"),
-        Input("MP32", "value"),
-        Input("BM02", "value"),
+        Input("M_per", "value"),
+        Input("Xf", "value"),
+        Input("SA", "value"), 
     ]
 )
-def update_gauche_value2(MPO9, MP13, MP20, MP22, MP32, BM02):
+def warnings_MFI(M, Xf, SA):
 
-    path_app = Path(__file__).parents[1]
+    nested_dict = {}
+    nested_dict["MFI_polymer"] = MFI_limits_dict
+    nested_dict["CI_polymer"] = CI_limits_dict
 
-    feature_limits_dict = create_all_model_json_dict(local=True,
-        path=path_app,
-        model_path="models",
-        features="feature_limits.json")
-    feature_limits_dict
+    feature_limits= flatten_consolidate_dict(nested_dict = nested_dict, take_lower_min=True, take_higher_max=True)
+
+    return html.Div(
+                children=[
+                    create_warning(TAG_limit_dict=feature_limits, key = "M%", value=M),
+                    create_warning(TAG_limit_dict=feature_limits, key = "Xf", value=Xf), 
+                    create_warning(TAG_limit_dict=feature_limits, key = "SA", value=SA)
+                ]
+            )
+
+     
+
+@app.callback(
+    Output("suggestion_id", "children"),
+    [
+        State("MFI_id", "value"),
+        State("M_per_range", "value"),
+        State("Xf_range", "value"),
+        State("SA_range", "value"), 
+        Input("execute-button", "n_clicks")
+
+    ]
+)
+def SP_prediction(SP_MFI, M_per_range, Xf_range, SA_range, n_clicks):
+
+    if n_clicks == 0:
+        return html.Div(html.H3("Execute the calculation"))
+
+    if n_clicks > 0:
+
+        SP_MFI = round(SP_MFI, 2)
+
+        # MFI_limits_dict
+
+        nested_dict = {}
+        nested_dict["MFI_model"] = MFI_limits_dict
+        nested_dict["CI_mode"] = CI_limits_dict
+
+        bounds = [[M_per_range[0], M_per_range[1]], [Xf_range[0], Xf_range[1]], [SA_range[0], SA_range[1]]]
+
+        # consolidated_limit_dict = flatten_consolidate_dict(nested_dict=nested_dict, take_lower_min=True, take_higher_max=True)
+        # list_of_features = ["M%",  "Xf", "SA"]
+
+        # bounds = [[consolidated_limit_dict[element]["min"], consolidated_limit_dict[element]["max"]] for element in list_of_features]
+
+        new_setpoints = genetic_algorithm(
+            objective=lossfunction,
+            target=SP_MFI,
+            bounds=bounds,
+            dtype_dict=MFI_dtype_dict,
+            model=MFI_model,
+            break_accuracy=0.09,
+            digits=5,
+            n_bits=16,
+            n_iter=2,
+            n_pop=100,
+            r_cross=0.9,
+            r_mut=None,
+        )
+
+        df = create_polymer_data(M_per=new_setpoints[0], Xf=new_setpoints[1], SA=new_setpoints[2])
+
+        df=decode_df_mlflow_dtype(data=df, dtype_dict=MFI_dtype_dict)
+
+        pred_MFI = round(MFI_model.predict(df)[0],2)
+
+        dff = df.iloc[:,:3]
+        dff = dff.round(2)
 
 
-    TAG_limit_dict = flatten_consolidate_dict(nested_dict = feature_limits_dict, take_lower_min=True, take_higher_max=True)
-    TAG_limit_dict
 
-    # MPO9 = 36
+        return html.Div(
+                    children=[
+                        html.H3(""),
+                        html.H3(f"Selected Model: MFI: {pred_MFI}"),
+                        dash_table.DataTable(
+                            id="table", 
+                            columns = [{"name": i, "id": i} for i in dff.columns],
+                            data= dff.to_dict(orient="records")
+                        )
+                    ]
+                )
 
-    output = []
-    output.append(create_warning(TAG_limit_dict=TAG_limit_dict, key="ManufacturingProcess09", value=MPO9, digits=2))
-    output.append(create_warning(TAG_limit_dict=TAG_limit_dict, key="ManufacturingProcess13", value=MP13, digits=2))
-    output.append(create_warning(TAG_limit_dict=TAG_limit_dict, key="ManufacturingProcess20", value=MP20, digits=2))
-    output.append(create_warning(TAG_limit_dict=TAG_limit_dict, key="ManufacturingProcess22", value=MP22, digits=2))
-    output.append(create_warning(TAG_limit_dict=TAG_limit_dict, key="ManufacturingProcess32", value=MP32, digits=2))
-    output.append(create_warning(TAG_limit_dict=TAG_limit_dict, key="BiologicalMaterial02", value=BM02, digits=2))
-    # print(output)
-    
-    return html.Div(children = output, style = {"display": "block"})
+
+
+@app.callback(
+    Output("suggestion_id2", "children"),
+    [
+        State("CI_id", "value"),
+        State("M_per_range", "value"),
+        State("Xf_range", "value"),
+        State("SA_range", "value"), 
+        Input("execute-button", "n_clicks")
+
+    ]
+)
+def SP_prediction(SP_CI, M_per_range, Xf_range, SA_range, n_clicks):
+
+    if n_clicks == 0:
+        return html.Div(html.H3("Execute the calculation"))
+
+    if n_clicks > 0:
+
+        SP_CI = round(SP_CI, 2)
+
+        nested_dict = {}
+        nested_dict["MFI_model"] = MFI_limits_dict
+        nested_dict["CI_mode"] = CI_limits_dict
+
+        bounds = [[M_per_range[0], M_per_range[1]], [Xf_range[0], Xf_range[1]], [SA_range[0], SA_range[1]]]
+
+        new_setpoints = genetic_algorithm(
+            objective=lossfunction,
+            target=SP_CI,
+            bounds=bounds,
+            dtype_dict=MFI_dtype_dict,
+            model=MFI_model,
+            break_accuracy=0.09,
+            digits=5,
+            n_bits=16,
+            n_iter=2,
+            n_pop=100,
+            r_cross=0.9,
+            r_mut=None,
+        )
+
+        df = create_polymer_data(M_per=new_setpoints[0], Xf=new_setpoints[1], SA=new_setpoints[2])
+
+        df=decode_df_mlflow_dtype(data=df, dtype_dict=CI_dtype_dict)
+
+        pred_CI = round(CI_model.predict(df)[0],2)
+
+        dff = df.iloc[:,:3]
+        dff = dff.round(2)
+
+
+        return html.Div(
+                    children=[
+                        html.H3(""),
+                        html.H3(f"Selected Model: CI: {pred_CI}"),
+                        dash_table.DataTable(
+                            id="table", 
+                            columns = [{"name": i, "id": i} for i in dff.columns],
+                            data= dff.to_dict(orient="records")
+                        )
+                    ]
+                )
 
 
 

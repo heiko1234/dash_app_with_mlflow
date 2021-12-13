@@ -49,7 +49,7 @@ def all_run_ids(model_names):
     output = {}
     for model in model_names:
         try:
-            model_id = get_mlflow_model(model_name="dashapp_model").metadata.run_id
+            model_id = get_mlflow_model(model_name=model).metadata.run_id
             output[model] = model_id
         except:
             continue
@@ -98,6 +98,7 @@ def main():
 
     run_id_dicts = all_run_ids(model_names=model_list)
     for model in model_list:
+        print(f"download run_id: {run_id_dicts[model]}")
         try:
             print(f"Started to dump: {model} into {local_path}")
             mlflow_model_to_local_dumper(
