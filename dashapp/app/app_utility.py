@@ -259,7 +259,7 @@ def create_polymer_data(M_per, Xf, SA):
 
 
 
-
+# functions for genetic optimizer
 
 # decode bitstring to numbers
 def decode(bounds, n_bits, bitstring):
@@ -315,7 +315,7 @@ def mutation(bitstring, r_mut):
             bitstring[i] = 1 - bitstring[i]
 
 
-# lossfucntion
+# lossfucntion for optimizer
 def lossfunction(target, X, dtype_dict, model):
     idata = create_polymer_data(M_per=X[0], Xf=X[1], SA=X[2])
     decode_df_mlflow_dtype(data=idata, dtype_dict=dtype_dict)
